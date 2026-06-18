@@ -1,0 +1,40 @@
+# Target identification
+target_id: TARGET_ID
+runs_dir: /gpfs/deepfold/casp/casp17-ligand/targets/TARGET_ID/runs
+results_dir: /gpfs/deepfold/casp/casp17-ligand/targets/TARGET_ID/results
+
+# Models to use
+models:
+  - af3
+  - bt2
+  - pt2
+  - of3
+
+# Ligands
+ligands:
+  - id: ligand
+    smiles: "SMILES_HERE"
+
+# Step 0
+n_seeds: 50
+n_samples: 5
+chain_protein: A
+chain_ligand: B
+
+# Step 1
+pocket_eps: 8.0
+pocket_top_n: 10
+
+# Step 2
+pocket_top_final: 5
+
+# Step 4
+poses_per_pocket: 5
+
+# Backends
+pocket_detector: p2rank
+docking_scorer: gnina
+format_converter: openbabel
+
+# Optional prior knowledge
+prior_binding_site: null
