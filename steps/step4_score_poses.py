@@ -2,7 +2,8 @@
 """
 step4_score_poses.py
 Score representative poses per pocket cluster using GNINA.
-Usage: python pipeline/steps/step4_score_poses.py --config targets/T2383/config.yaml
+Receptor and ligand extracted from same CIF to ensure coordinate consistency.
+Usage: python ligand_select/steps/step4_score_poses.py --config targets/T2383/config.yaml
 """
 
 from __future__ import annotations
@@ -119,22 +120,22 @@ def run_gnina(gnina_sif: str,
 
 
 def write_pymol_script(df: pd.DataFrame, ref_cif: Path, out_pml: Path) -> None:
-    lines = []
-    lines.append(f"load {ref_cif}, reference")
-    lines.append("hide everything, reference")
-    lines.append("show cartoon, reference and polymer")
-    lines.append("set cartoon_transparency, 0.7, reference")
-    lines.append("color gray80, reference")
-
+    lines = [
+        f"load {ref_cif}, reference",
+        "hide everything, reference",
+        "show cartoon, reference and polymer",
+        "set cartoon_transparency, 0.7, reference",
+        "color gray80, reference",
+    ]
     for _, row in df.iterrows():
         name = f"{row['pocket']}_{row['pose_cluster']}"
-        lines.append(f"load {row['rep_cif']}, {name}")
-        lines.append(f"hide everything, {name}")
-        lines.append(f"show sticks, {name} and organic")
-        lines.append(f"align {name}, reference")
-
-    lines.append("util.cbag organic")
-    lines.append("zoom organic")
+        lines += [
+            f"load {row['rep_cif']}, {name}",
+            f"hide everything, {name}",
+            f"show sticks, {name} and organic",
+            f"align {name}, reference",
+        ]
+    lines += ["util.cbag organic", "zoom organic"]
     out_pml.write_text("\n".join(lines))
     print(f"Saved: {out_pml}")
 
@@ -181,13 +182,12 @@ def main():
 
                 print(f"  {tag} (n={row['n']}, "
                       f"model={row['rep_model']}, "
-                      f"seed={row['rep_seed']})... ", end="", flush=True)
+                      f"seed={int(row['rep_seed'])}, "
+                      f"conf={int(row['conformation_label'])})... ",
+                      end="", flush=True)
 
-                # Convert — temp files for receptor/ligand input
                 rec_pdb = tmpdir / f"{tag}_receptor.pdb"
                 lig_sdf = tmpdir / f"{tag}_ligand.sdf"
-
-                # Minimized output saved permanently
                 out_sdf = minimized_dir / f"{tag}_minimized.sdf"
 
                 try:
@@ -200,18 +200,17 @@ def main():
                     print(f"FAILED ({e})")
                     continue
 
-                # Score with local_only
                 scores = run_gnina(gnina_sif, rec_pdb, lig_sdf, out_sdf)
                 if scores is None:
                     print("FAILED (gnina)")
                     continue
 
-                print(f"affinity={scores.get('gnina_affinity'):.2f} "
-                      f"cnn={scores.get('gnina_cnn_score'):.3f} "
+                print(f"affinity={scores.get('gnina_affinity', 0):.2f} "
+                      f"cnn={scores.get('gnina_cnn_score', 0):.3f} "
                       f"rmsd={scores.get('gnina_rmsd', 0):.3f}")
 
                 result = row.to_dict()
-                result.update(scores)
+                result.update({k: round(v, 4) for k, v in scores.items()})
                 result["minimized_sdf"] = str(out_sdf)
                 results.append(result)
 
@@ -220,29 +219,26 @@ def main():
         return
 
     df = pd.DataFrame(results)
-
-    # Rank within each pocket by CNNscore
     df["pocket_rank"] = df.groupby("pocket")["gnina_cnn_score"].rank(
         ascending=False, method="first").astype(int)
 
-    # Global top 25
     top25 = df.nlargest(25, "gnina_cnn_score").copy()
     top25["global_rank"] = range(1, len(top25) + 1)
 
-    # Save
     df.to_csv(out_dir / "poses_scored.csv", index=False)
     top25.to_csv(out_dir / "top25.csv", index=False)
     write_pymol_script(top25, ref_cif, out_dir / "load_final.pml")
 
     print(f"\n=== TOP 25 CANDIDATES ===")
-    cols = ["pocket", "pose_cluster", "n", "rep_model", "rep_seed",
-            "gnina_affinity", "gnina_cnn_score", "gnina_cnn_affinity",
-            "gnina_rmsd"]
+    cols = ["pocket", "pose_cluster", "n", "conformation_label",
+            "rep_model", "rep_seed",
+            "gnina_affinity", "gnina_cnn_score", "gnina_cnn_affinity", "gnina_rmsd"]
     print(top25[cols].to_string(index=False))
     print(f"\nSaved: {out_dir}/poses_scored.csv")
     print(f"Saved: {out_dir}/top25.csv")
     print(f"Saved: {out_dir}/load_final.pml")
     print(f"Minimized poses: {minimized_dir}/")
+
 
 if __name__ == "__main__":
     main()

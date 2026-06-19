@@ -11,45 +11,53 @@ Developed for CASP17 ligand targets. Designed to be reusable across targets and 
 Given thousands of predicted protein-ligand structures from multiple models, the pipeline:
 
 1. Builds a master index of all predictions with confidence scores
-2. Identifies candidate binding pockets by ligand centroid clustering
-3. Validates pockets using P2Rank geometric cavity detection
-4. Clusters ligand poses within each pocket by RMSD
-5. Scores poses using GNINA (CNN-based docking scorer)
-6. Produces a ranked list of 25 candidates for human review and final selection
+2. Analyzes protein conformational diversity via PCA (human inspection recommended)
+3. Identifies candidate binding pockets by ligand centroid clustering
+4. Validates pockets using P2Rank geometric cavity detection
+5. Clusters ligand poses within each pocket by full ligand RMSD
+6. Scores poses using GNINA (CNN-based docking scorer)
+7. Produces a ranked candidate list for human review and final selection of 5 poses
 
-All intermediate results are saved at each step for full provenance and auditability. The pipeline is designed to be purely data-driven (no prior knowledge of binding site required), with optional domain knowledge override at the final step.
+All intermediate results are saved at each step for full provenance and auditability. The pipeline is designed to be purely data-driven (no prior knowledge of binding site required), with human review at the final step.
 
 ---
 
 ## Pipeline Steps
 
 ```
-Step 0: Build index
-        → index.csv (all structures + confidence scores)
-        → reference.txt (best structure for alignment)
+Step 0a: Build index
+         → index.csv (all structures + confidence scores)
 
-Step 1: Pocket identification
-        → Kabsch alignment of all structures to reference
-        → DBSCAN clustering of ligand centroids
-        → top 10 candidate pockets
+Step 0b: Conformation PCA  ← human inspection recommended
+         → conformation_pca.png  (PCA plot colored by model)
+         → conformation_pc1_hist.png  (PC1 distribution)
+         → index.csv updated with conformation_label column
+         → reference.txt (most central structure for alignment)
+         → conformation_view.pml (PyMOL: representative structures)
 
-Step 2: Pocket validation
-        → P2Rank geometric cavity detection
-        → Combined ranking (cluster size + P2Rank score)
-        → top 5 pockets
+Step 1:  Pocket identification
+         → Kabsch alignment of all structures to reference
+         → DBSCAN clustering of ligand centroids
+         → Optionally split by conformation_label (split_by_conformation: true)
+         → top 10 candidate pockets
 
-Step 3: Pose clustering
-        → Per-pocket ligand RMSD clustering
-        → Representative pose per cluster
+Step 2:  Pocket validation
+         → P2Rank run on each pocket's representative structure
+         → Combined ranking: 50% cluster size + 50% P2Rank score
+         → top 5 pockets selected, top 10 recorded
 
-Step 4: Pose scoring
-        → GNINA local_only scoring
-        → top 25 candidates
+Step 3:  Pose clustering
+         → Per-pocket full ligand RMSD clustering (eps=2Å)
+         → Representative pose per cluster
 
-Step 5: Human review
-        → Inspect top 25 candidates
-        → Apply domain knowledge if available
-        → Final 5 selections for CASP submission
+Step 4:  Pose scoring
+         → GNINA local_only scoring (receptor + ligand from same CIF)
+         → top 25 candidates ranked by CNN score
+
+Step 5:  Human review + final selection
+         → Filtered candidate list (min cluster size n≥5)
+         → selection_report.txt for human-guided final 5 selection
+         → candidates.pml for PyMOL inspection
 ```
 
 ---
@@ -113,72 +121,108 @@ ligands:
     smiles: "YOUR_LIGAND_SMILES"
 p2rank_bin: /path/to/p2rank/prank
 gnina_sif: /path/to/gnina.sif
+split_by_conformation: false  # true if conformational change affects binding site
+# max_per_pocket: 200         # uncomment for testing (limits structures per pocket)
 ```
 
 ### 3. Run the pipeline
 
-Run steps individually:
+Run all steps at once:
 
 ```bash
-# Step 0: Build index
+cd /path/to/casp17-ligand
+bash ligand_select/run_pipeline.sh --config targets/T2383/config.yaml
+```
+
+Or run from a specific step (useful for re-running after parameter changes):
+
+```bash
+bash ligand_select/run_pipeline.sh --config targets/T2383/config.yaml --from-step 3 --to-step 5
+```
+
+Or run steps individually:
+
+```bash
 python ligand_select/steps/step0a_build_index.py --config targets/T2383/config.yaml
-
-# Step 1: Cluster pockets
+python ligand_select/steps/step0b_conformation_pca.py --config targets/T2383/config.yaml
 python ligand_select/steps/step1_cluster_pockets.py --config targets/T2383/config.yaml
-
-# Step 2: Validate pockets
 python ligand_select/steps/step2_validate_pockets.py --config targets/T2383/config.yaml
-
-# Step 3: Cluster poses
 python ligand_select/steps/step3_cluster_poses.py --config targets/T2383/config.yaml
-
-# Step 4: Score poses
 python ligand_select/steps/step4_score_poses.py --config targets/T2383/config.yaml
+python ligand_select/steps/step5_select_final.py --config targets/T2383/config.yaml
 ```
 
-Or run all steps via master runner (coming soon):
+### 4. Inspect conformation PCA (Step 0b)
 
-```bash
-./run_pipeline.sh targets/T2383/config.yaml
-```
-
-### 4. Review results
+After step 0b, inspect the PCA plot before proceeding:
 
 ```
-targets/T2383/results/
-  step0/index.csv              # all structures + scores
-  step1/pockets.csv            # top 10 pockets
-  step1/centroids.png          # pocket visualization
-  step2/pockets_validated.csv  # ranked pockets
-  step3/all_clusters.csv       # pose clusters
-  step4/top25.csv              # final 25 candidates
-  step4/load_final.pml         # PyMOL visualization
-  step4/minimized/             # GNINA-minimized poses
+targets/T2383/results/step0/conformation_pca.png
+```
+
+If models clearly separate into two groups → consider setting `split_by_conformation: true` in config.
+
+### 5. Review final candidates (Step 5)
+
+```
+targets/T2383/results/step5/selection_report.txt  # ranked candidates for human review
+targets/T2383/results/step5/candidates.pml        # PyMOL visualization
 ```
 
 Open in PyMOL:
 ```bash
-pymol targets/T2383/results/step4/load_final.pml
+pymol targets/T2383/results/step5/candidates.pml
 ```
 
 ---
 
-## Output
+## Output Structure
 
-### top25.csv columns
+```
+targets/T2383/results/
+  step0/
+    index.csv                  # all structures + scores + conformation_label
+    reference.txt              # path to reference structure
+    conformation_pca.png       # PCA plot colored by model
+    conformation_pc1_hist.png  # PC1 distribution per model
+    conformation_view.pml      # PyMOL: conformation representatives
+  step1/
+    centroids.csv              # per-structure ligand centroids + pocket labels
+    pockets.csv                # top 10 pocket summary
+    centroids.png              # pocket visualization (3 projections)
+  step2/
+    pockets_validated.csv      # ranked pockets with P2Rank scores
+    p2rank/                    # P2Rank outputs per pocket
+  step3/
+    all_clusters.csv           # all pose clusters across pockets
+    pocket_N_clusters.csv      # per-pocket cluster summary
+    pocket_N_poses.pml         # PyMOL: pose clusters per pocket
+  step4/
+    poses_scored.csv           # all scored clusters
+    top25.csv                  # top 25 by CNN score
+    minimized/                 # GNINA-minimized ligand SDFs
+    load_final.pml             # PyMOL: top 25 candidates
+  step5/
+    candidates.csv             # filtered candidates for final selection
+    candidates.pml             # PyMOL: candidates
+    selection_report.txt       # human-readable summary for final selection
+```
 
-| Column | Description |
-|--------|-------------|
-| pocket | Pocket ID (pocket_1 = most populated) |
-| pose_cluster | Pose cluster within pocket |
-| n | Number of structures in cluster |
-| rep_model | Model of representative structure |
-| rep_seed | Seed of representative structure |
-| gnina_affinity | Vina-style binding affinity (kcal/mol) |
-| gnina_cnn_score | CNN-based pose quality score |
-| gnina_cnn_affinity | CNN-based binding affinity |
-| gnina_rmsd | RMSD from original predicted pose after minimization |
-| minimized_sdf | Path to GNINA-minimized ligand SDF |
+---
+
+## Key Design Decisions
+
+### Alignment
+All protein structures are aligned via Kabsch algorithm (utils/kabsch.py) to a common reference before centroid/RMSD computations. The reference structure is selected as the most central structure in PC space (score-independent).
+
+### P2Rank usage
+P2Rank is run on each pocket's representative structure (not a single global reference), for consistency with the consensus-based pocket selection. P2Rank contributes 50% to pocket ranking; cluster size contributes 50%. P2Rank is sensitive to protein conformation — results should be interpreted with this in mind.
+
+### GNINA scoring
+Receptor and ligand are extracted from the same CIF file to ensure coordinate system consistency. `--local_only` mode scores the predicted pose without global docking search.
+
+### Conformation handling
+Step 0b detects multiple protein conformations via joint PCA on Cα coordinates (top 1 structure per seed per model). If bimodality is detected along PC1, `conformation_label` is assigned per structure. Step 1 can optionally cluster pockets separately per conformation (`split_by_conformation: true`).
 
 ---
 
@@ -186,9 +230,10 @@ pymol targets/T2383/results/step4/load_final.pml
 
 - **Hierarchical**: pocket selection → pose selection
 - **Data-driven**: no prior knowledge of binding site required
-- **Modular**: each step has inspectable input/output
-- **Extensible**: scoring backends (GNINA/Vina) and pocket detectors (P2Rank/fpocket) designed to be swappable
-- **Provenance**: all intermediate results saved for auditability and ML training
+- **Consensus-based**: structural agreement across thousands of predictions is the primary signal
+- **Modular**: each step has inspectable input/output CSV
+- **Extensible**: scoring backends and pocket detectors designed to be swappable
+- **Provenance**: all intermediate results saved for auditability and future ML training
 
 ---
 
